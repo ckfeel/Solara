@@ -4707,7 +4707,7 @@ function exportPlaylist() {
     try {
         const payload = {
             meta: {
-                app: "Solara",
+                app: "⑤号音乐库",
                 version: PLAYLIST_EXPORT_VERSION,
                 exportedAt: new Date().toISOString(),
                 itemCount: state.playlistSongs.length
