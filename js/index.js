@@ -5334,7 +5334,7 @@ function exportFavorites() {
     try {
         const payload = {
             meta: {
-                app: "Solara",
+                app: "⑤号音乐库",
                 version: FAVORITE_EXPORT_VERSION,
                 exportedAt: new Date().toISOString(),
                 itemCount: favorites.length,
