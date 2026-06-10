@@ -788,17 +788,6 @@ const API = {
                 throw new Error(`Request failed with status ${response.status}`);
             }
 
-            const cacheStatus = response.headers.get("X-Cache-Status");
-            if (cacheStatus) {
-                const urlObj = new URL(url, window.location.origin);
-                const type = urlObj.searchParams.get("types") || "未知接口";
-                if (cacheStatus === "HIT") {
-                    debugLog(`[边缘缓存] 命中接口数据: ${type}`);
-                } else if (cacheStatus === "MISS") {
-                    debugLog(`[穿透回源] 拉取接口数据: ${type}`);
-                }
-            }
-
             const text = await response.text();
             try {
                 return JSON.parse(text);
@@ -962,61 +951,20 @@ const state = {
 
 let importSelectedMenuOutsideHandler = null;
 
-/**
- * 状态自洽性检查：
- * 如果当前指向的播放列表为空，则清除当前歌曲状态，防止“幽灵播放”
- */
-function validateStateConsistency() {
-    const isPlaylistEmpty = () => {
-        if (state.currentPlaylist === 'playlist') return state.playlistSongs.length === 0;
-        if (state.currentPlaylist === 'favorites') return state.favoriteSongs.length === 0;
-        if (state.currentPlaylist === 'search') return state.searchResults.length === 0;
-        if (state.currentPlaylist === 'online') return state.onlineSongs.length === 0;
-        return false;
-    };
-
-    if (isPlaylistEmpty() && state.currentSong !== null) {
-        debugLog("检测到列表为空，清除幽灵播放歌曲");
-        state.currentSong = null;
-        state.currentTrackIndex = -1;
-        state.currentAudioUrl = null;
-        state.currentPlaybackTime = 0;
-        
-        // 更新本地持久化
-        safeRemoveLocalStorage("currentSong", { skipRemote: true });
-        safeSetLocalStorage("currentTrackIndex", "-1", { skipRemote: true });
-        
-        // 更新 UI (如果 DOM 已加载)
-        if (dom.currentSongTitle) dom.currentSongTitle.textContent = "选择一首歌曲开始播放";
-        if (dom.currentSongArtist) dom.currentSongArtist.textContent = "未知艺术家";
-        if (typeof showAlbumCoverPlaceholder === "function") showAlbumCoverPlaceholder();
-        if (typeof updateMobileToolbarTitle === "function") updateMobileToolbarTitle();
-        if (typeof updatePlayPauseButton === "function") updatePlayPauseButton();
-    }
-}
-
-// 规范化收藏夹数据
-state.favoriteSongs = (typeof ensureFavoriteSongsArray === "function" ? ensureFavoriteSongsArray() : (state.favoriteSongs || []))
-    .map((song) => (typeof sanitizeImportedSong === "function" ? sanitizeImportedSong(song) : song) || song)
-    .filter((song) => song && typeof song === "object");
-
-// 确保 currentList 状态正确
-if (state.currentList === "favorite" && state.favoriteSongs.length === 0) {
+if (state.currentList === "favorite" && (!Array.isArray(state.favoriteSongs) || state.favoriteSongs.length === 0)) {
     state.currentList = "playlist";
 }
 if (state.currentList === "favorite") {
     state.currentPlaylist = "favorites";
 }
-
-// 修正收藏夹索引
-if (state.favoriteSongs.length === 0) {
+state.favoriteSongs = ensureFavoriteSongsArray()
+    .map((song) => sanitizeImportedSong(song) || song)
+    .filter((song) => song && typeof song === "object");
+if (!Array.isArray(state.favoriteSongs) || state.favoriteSongs.length === 0) {
     state.currentFavoriteIndex = 0;
 } else if (state.currentFavoriteIndex >= state.favoriteSongs.length) {
     state.currentFavoriteIndex = state.favoriteSongs.length - 1;
 }
-
-// 启动时执行一次自洽性检查
-validateStateConsistency();
 saveFavoriteState();
 
 async function bootstrapPersistentStorage() {
@@ -1027,8 +975,6 @@ async function bootstrapPersistentStorage() {
             return;
         }
         applyPersistentSnapshotFromRemote(snapshot.data);
-        // 远程同步后再次检查自洽性
-        validateStateConsistency();
     } catch (error) {
         console.warn("加载远程存储失败", error);
     } finally {
@@ -1300,7 +1246,7 @@ bootstrapPersistentStorage();
     function updateMediaMetadata() {
         // 依赖现有全局 state.currentSong；已在项目中使用 localStorage 保存/恢复。:contentReference[oaicite:7]{index=7}
         const song = state.currentSong || {};
-        const title = song.name || dom.currentSongTitle?.textContent || '⑤号音乐库';
+        const title = song.name || dom.currentSongTitle?.textContent || 'Solara';
         const artist = song.artist || dom.currentSongArtist?.textContent || '';
         const artworkUrl = state.currentArtworkUrl || '';
 
@@ -2208,14 +2154,13 @@ async function updateDynamicBackground(imageUrl) {
         paletteCache.delete(imageUrl);
         paletteCache.set(imageUrl, cached);
         queuePaletteApplication(cached, imageUrl);
-        debugLog("[本地缓存] 动态背景提取成功");
-        console.log(`[Palette CACHE] Loaded colors from local cache: ${imageUrl}`);
+        debugLog("动态背景加载成功");
         return;
     }
 
     if (state.currentPaletteImage === imageUrl && state.dynamicPalette) {
         queuePaletteApplication(state.dynamicPalette, imageUrl);
-        debugLog("[内存复用] 动态背景提取成功");
+        debugLog("动态背景加载成功");
         return;
     }
 
@@ -2233,19 +2178,17 @@ async function updateDynamicBackground(imageUrl) {
             return;
         }
         queuePaletteApplication(palette, imageUrl);
-        debugLog("[后端解析] 动态背景提取成功");
-        console.log(`[Palette BACKEND] Successfully extracted colors using Backend API: ${imageUrl}`);
+        debugLog("动态背景加载成功");
     } catch (error) {
         if (error?.name === "AbortError") {
             return;
         }
 
-        console.warn(`[Palette ERROR] Backend extraction failed:`, error);
-        debugLog("[后端解析] 失败，尝试前端降级");
+        console.warn("获取远程动态背景失败，尝试客户端降级提取:", error);
+        debugLog("动态背景加载失败 尝试前端解析");
 
         try {
             // 降级方案：使用客户端 Canvas 提取 (支持 PNG/WebP 且绕过服务器解码限制)
-            console.log(`[Palette FALLBACK] Attempting extraction using Frontend Canvas API...`);
             const clientPalette = await extractPaletteFromCanvas(imageUrl);
             if (requestId !== paletteRequestId) {
                 return;
@@ -2259,11 +2202,11 @@ async function updateDynamicBackground(imageUrl) {
             persistPaletteCache();
 
             queuePaletteApplication(clientPalette, imageUrl);
-            debugLog("[前端降级] 动态背景提取成功");
-            console.log(`[Palette FRONTEND] Successfully extracted colors using Frontend Canvas API: ${imageUrl}`);
+            debugLog("前端解析成功");
+            debugLog("动态背景加载成功");
         } catch (fallbackError) {
             console.warn("客户端降级提取也失败了:", fallbackError);
-            debugLog(`[前端降级] 失败: 使用默认背景`);
+            debugLog(`动态背景加载失败: ${fallbackError}`);
             if (requestId === paletteRequestId) {
                 resetDynamicBackground();
             }
@@ -4707,7 +4650,7 @@ function exportPlaylist() {
     try {
         const payload = {
             meta: {
-                app: "⑤号音乐库",
+                app: "Solara",
                 version: PLAYLIST_EXPORT_VERSION,
                 exportedAt: new Date().toISOString(),
                 itemCount: state.playlistSongs.length
@@ -5291,29 +5234,6 @@ function clearFavorites() {
     if (state.currentList === "favorite") {
         state.currentList = "playlist";
         state.currentPlaylist = "playlist";
-        // 如果清空时正在播放收藏列表的歌，停止播放
-        dom.audioPlayer.pause();
-        dom.audioPlayer.src = "";
-        state.currentTrackIndex = -1;
-        state.currentSong = null;
-        state.currentAudioUrl = null;
-        state.currentPlaybackTime = 0;
-        state.lastSavedPlaybackTime = 0;
-        dom.progressBar.value = 0;
-        dom.progressBar.max = 0;
-        dom.currentTimeDisplay.textContent = "00:00";
-        dom.durationDisplay.textContent = "00:00";
-        updateProgressBarBackground(0, 1);
-        dom.currentSongTitle.textContent = "选择一首歌曲开始播放";
-        updateMobileToolbarTitle();
-        dom.currentSongArtist.textContent = "未知艺术家";
-        showAlbumCoverPlaceholder();
-        clearLyricsContent();
-        if (dom.lyrics) {
-            dom.lyrics.dataset.placeholder = "default";
-        }
-        dom.lyrics.classList.add("empty");
-        updatePlayPauseButton();
     }
     saveFavoriteState();
     savePlayerState();
@@ -5334,7 +5254,7 @@ function exportFavorites() {
     try {
         const payload = {
             meta: {
-                app: "⑤号音乐库",
+                app: "Solara",
                 version: FAVORITE_EXPORT_VERSION,
                 exportedAt: new Date().toISOString(),
                 itemCount: favorites.length,
@@ -5907,29 +5827,14 @@ async function playOnlineSong(index) {
     const song = state.onlineSongs[index];
     if (!song) return;
 
-    // 检查歌曲是否已在播放列表中
-    const existingIndex = state.playlistSongs.findIndex(s => getSongKey(s) === getSongKey(song));
-
-    if (existingIndex !== -1) {
-        state.currentTrackIndex = existingIndex;
-        state.currentPlaylist = "playlist";
-        state.currentList = "playlist";
-    } else {
-        state.playlistSongs.push(song);
-        state.currentTrackIndex = state.playlistSongs.length - 1;
-        state.currentPlaylist = "playlist";
-        state.currentList = "playlist";
-    }
+    state.currentTrackIndex = index;
+    state.currentPlaylist = "online";
+    state.currentList = "playlist";
 
     try {
         await playSong(song);
-        updatePlaylistHighlight();
+        updateOnlineHighlight();
         updatePlayModeUI();
-        renderPlaylist();
-        updatePlaylistActionStates();
-        
-        // 可选：如果希望继续高亮“探索雷达”中的项，保留对 updateOnlineHighlight 的调用
-        // updateOnlineHighlight();
     } catch (error) {
         console.error("播放失败:", error);
         showNotification("播放失败，请稍后重试", "error");
@@ -6373,20 +6278,8 @@ function initSettings() {
     if (dom.logo) {
         dom.logo.addEventListener("dblclick", openSettingsModal);
     }
-    
-    // 移动端双击标题或图标打开设置 (优化移动端双击兼容性)
-    let lastToolbarClick = 0;
-    const handleDoubleTap = (e) => {
-        const now = Date.now();
-        if (now - lastToolbarClick < 300) {
-            e.preventDefault();
-            openSettingsModal();
-        }
-        lastToolbarClick = now;
-    };
-
     if (dom.mobileToolbarTitle) {
-        dom.mobileToolbarTitle.addEventListener("click", handleDoubleTap);
+        dom.mobileToolbarTitle.addEventListener("dblclick", openSettingsModal);
     }
 
     // 绑定按钮事件
